@@ -1,7 +1,6 @@
-name = "ws-broadcast"
+name = "wsp"
 main = "src/ws.js"
 compatibility_date = "2025-07-29"
-type = "module"
 
 [durable_objects]
 bindings = [
@@ -11,3 +10,7 @@ bindings = [
 [[migrations]]
 tag = "v1"
 new_classes = [ "wsRoom" ]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = [ "wsRoom" ]
