@@ -1,46 +1,44 @@
 export class wsRoom {
-  constructor(ctx, env) {
-    this.ctx = ctx;
+  constructor(state, env) {
+    this.state = state;
     this.env = env;
-    this.connections = new Map(); // connectionId -> WebSocket
+    this.connections = new Set();
   }
 
-  // Обработка входящих запросов
-  async fetch(req) {
-    if (req.headers.get("Upgrade") !== "websocket") {
-      return new Response("Expected websocket", { status: 400 });
+  async fetch(request) {
+    if (request.headers.get("Upgrade") !== "websocket") {
+      return new Response("Expected WebSocket", { status: 426 });
     }
 
-    const { 0: client, 1: server } = new WebSocketPair();
-    const id = crypto.randomUUID();
+    const [client, server] = Object.values(new WebSocketPair());
 
     server.accept();
-    this.connections.set(id, server);
+    this.connections.add(server);
 
     server.addEventListener("message", (event) => {
-      this.broadcast(event.data, id);
+      for (const conn of this.connections) {
+        if (conn !== server) {
+          conn.send(event.data);
+        }
+      }
     });
 
     server.addEventListener("close", () => {
-      this.connections.delete(id);
-    });
-
-    server.addEventListener("error", () => {
-      this.connections.delete(id);
+      this.connections.delete(server);
     });
 
     return new Response(null, { status: 101, webSocket: client });
   }
-
-  broadcast(message, excludeId) {
-    for (const [id, socket] of this.connections) {
-      if (id !== excludeId && socket.readyState === WebSocket.OPEN) {
-        try {
-          socket.send(message);
-        } catch {
-          socket.close(1011, "Broadcast error");
-        }
-      }
-    }
-  }
 }
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    const roomId = url.searchParams.get("room") || "default";
+
+    const id = env.WS_ROOM.idFromName(roomId);
+    const stub = env.WS_ROOM.get(id);
+
+    return stub.fetch(request);
+  }
+};
