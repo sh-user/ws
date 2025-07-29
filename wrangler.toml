@@ -1,9 +1,13 @@
-name = "websocket-broadcast"
+name = "ws-broadcast"
 main = "src/ws.js"
 compatibility_date = "2025-07-29"
-account_id = "fa0f2e44978d0e38ed7a3a61828a1170"
+type = "module"
 
 [durable_objects]
 bindings = [
   { name = "WS_ROOM", class_name = "wsRoom" }
 ]
+
+[[migrations]]
+tag = "v1"
+new_classes = [ "wsRoom" ]
