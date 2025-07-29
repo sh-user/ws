@@ -1,7 +1,7 @@
 name = "websocket-broadcast"
 main = "src/ws.js"
 compatibility_date = "2025-07-29"
-account_id = "your-account-id"
+account_id = "fa0f2e44978d0e38ed7a3a61828a1170"
 
 [durable_objects]
 bindings = [
