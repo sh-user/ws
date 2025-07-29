@@ -1,4 +1,4 @@
-export class ChatRoom {
+export class wsRoom {
   constructor(ctx, env) {
     this.ctx = ctx;
     this.env = env;
