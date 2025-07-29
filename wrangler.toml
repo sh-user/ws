@@ -1,4 +1,4 @@
-name = "wsp"
+name = "ws"
 main = "src/ws.js"
 compatibility_date = "2025-07-29"
 
