@@ -9,8 +9,4 @@ bindings = [
 
 [[migrations]]
 tag = "v1"
-new_classes = [ "wsRoom" ]
-
-[[migrations]]
-tag = "v2"
 new_sqlite_classes = [ "wsRoom" ]
