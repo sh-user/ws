@@ -5,5 +5,5 @@ account_id = "fa0f2e44978d0e38ed7a3a61828a1170"
 
 [durable_objects]
 bindings = [
-  { name = "CHAT_ROOM", class_name = "ChatRoom" }
+  { name = "WS_ROOM", class_name = "wsRoom" }
 ]
