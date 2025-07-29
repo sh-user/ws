@@ -1,5 +1,5 @@
 name = "websocket-broadcast"
-main = "src/chat-room.js"
+main = "src/ws.js"
 compatibility_date = "2025-07-29"
 account_id = "your-account-id"
 
