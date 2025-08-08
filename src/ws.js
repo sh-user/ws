@@ -16,14 +16,22 @@ export class wsRoom {
     this.connections.add(server);
 
     server.addEventListener("message", (event) => {
-      for (const conn of this.connections) {
-        if (conn !== server) {
-          conn.send(event.data);
+      console.log("Received message:", event.data); // Отладка
+      if (event.data === "ping") {
+        console.log("Sending pong");
+        server.send("pong"); // Ответ на текстовое сообщение "ping"
+      } else {
+        // Рассылка сообщения всем остальным клиентам
+        for (const conn of this.connections) {
+          if (conn !== server) {
+            conn.send(event.data);
+          }
         }
       }
     });
 
     server.addEventListener("close", () => {
+      console.log("Connection closed"); // Отладка
       this.connections.delete(server);
     });
 
