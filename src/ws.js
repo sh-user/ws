@@ -8,6 +8,7 @@ var wsRoom = class {
     this.env = env;
     this.connections = new Set();
     this.sessions = new Map();
+    this.pingTimeouts = new Map(); // новый Map для таймаутов
   }
 
   broadcastDeviceList() {
@@ -17,9 +18,6 @@ var wsRoom = class {
     });
 
     for (const conn of this.connections) {
-      // Исправление 1: отправляем ТОЛЬКО тем, у кого НЕТ isDevice (т.е. браузерам)
-      // Было: if (!conn.isDevice)
-      // Остаётся то же, но с защитой от undefined
       if (!conn.isDevice) {
         try {
           conn.send(listMessage);
@@ -40,25 +38,56 @@ var wsRoom = class {
 
     this.connections.add(server);
 
+    // Новая функция: проверка жизни соединения
+    const schedulePing = () => {
+      const timeout = setTimeout(() => {
+        try {
+          server.send("ping");
+        } catch (e) {
+          // Если send бросил ошибку — соединение уже мёртвое
+          cleanup();
+        }
+      }, 10000); // пинг каждые 10 секунд
+
+      this.pingTimeouts.set(server, timeout);
+    };
+
+    const cleanup = () => {
+      clearTimeout(this.pingTimeouts.get(server));
+      this.pingTimeouts.delete(server);
+      this.connections.delete(server);
+      if (server.deviceId && server.isDevice) {
+        this.sessions.delete(server.deviceId);
+        this.broadcastDeviceList();
+      }
+    };
+
+    // Начинаем слать пинги сразу
+    schedulePing();
+
     server.addEventListener("message", (event) => {
       if (event.data === "ping") {
         server.send("pong");
+        return;
+      }
+      if (event.data === "pong") {
+        // Получили pong — планируем следующий пинг
+        clearTimeout(this.pingTimeouts.get(server));
+        schedulePing();
         return;
       }
 
       try {
         const data = JSON.parse(event.data);
 
-        // Регистрация платы
         if (data.type === "register" && data.deviceId) {
           server.deviceId = data.deviceId;
           server.isDevice = true;
           this.sessions.set(data.deviceId, server);
-          this.broadcastDeviceList();  // обновляем список при подключении
+          this.broadcastDeviceList();
           return;
         }
 
-        // Запрос списка от браузера
         if (data.type === "getList") {
           server.send(JSON.stringify({
             type: "deviceList",
@@ -67,7 +96,6 @@ var wsRoom = class {
           return;
         }
 
-        // Команда от браузера к плате
         if (data.targetId && data.command) {
           const targetSocket = this.sessions.get(data.targetId);
           if (targetSocket) {
@@ -77,12 +105,10 @@ var wsRoom = class {
         }
 
       } catch (e) {
-        // Исправление 2: данные от платы рассылаем ТОЛЬКО браузерам
-        // Было: if (conn !== server && !conn.isDevice)
-        // Стало: только !conn.isDevice (и conn !== server не нужен — плата себе не шлёт)
+        // Данные от платы — рассылаем браузерам
         if (server.isDevice) {
           for (const conn of this.connections) {
-            if (!conn.isDevice) {  // только браузерам
+            if (!conn.isDevice) {
               try {
                 conn.send(event.data);
               } catch (_) {
@@ -94,13 +120,8 @@ var wsRoom = class {
       }
     });
 
-    server.addEventListener("close", () => {
-      this.connections.delete(server);
-      if (server.deviceId && server.isDevice) {
-        this.sessions.delete(server.deviceId);
-        this.broadcastDeviceList();  // ← обновляем список при отключении
-      }
-    });
+    server.addEventListener("close", cleanup);
+    server.addEventListener("error", cleanup);
 
     return new Response(null, { status: 101, webSocket: client });
   }
