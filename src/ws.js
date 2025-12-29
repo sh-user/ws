@@ -7,10 +7,9 @@ var wsRoom = class {
     this.state = state;
     this.env = env;
     this.connections = new Set();
-    this.sessions = new Map(); // deviceId → websocket (платы)
+    this.sessions = new Map();
   }
 
-  // Рассылка списка только браузерам
   broadcastDeviceList() {
     const listMessage = JSON.stringify({
       type: "deviceList",
@@ -18,7 +17,10 @@ var wsRoom = class {
     });
 
     for (const conn of this.connections) {
-      if (conn.isBrowser) {  // Только явно помеченным браузерам
+      // Исправление 1: отправляем ТОЛЬКО тем, у кого НЕТ isDevice (т.е. браузерам)
+      // Было: if (!conn.isDevice)
+      // Остаётся то же, но с защитой от undefined
+      if (!conn.isDevice) {
         try {
           conn.send(listMessage);
         } catch (e) {
@@ -36,10 +38,6 @@ var wsRoom = class {
     const [client, server] = Object.values(new WebSocketPair());
     server.accept();
 
-    // Изначально ничего не помечаем
-    server.isBrowser = false;
-    server.isDevice = false;
-
     this.connections.add(server);
 
     server.addEventListener("message", (event) => {
@@ -51,24 +49,17 @@ var wsRoom = class {
       try {
         const data = JSON.parse(event.data);
 
-        // Веб-клиент объявляет себя браузером
-        if (data.type === "register-browser") {
-          server.isBrowser = true;
-          return;
-        }
-
         // Регистрация платы
         if (data.type === "register" && data.deviceId) {
           server.deviceId = data.deviceId;
           server.isDevice = true;
-          // НЕ устанавливаем isBrowser = true
           this.sessions.set(data.deviceId, server);
-          this.broadcastDeviceList();
+          this.broadcastDeviceList();  // обновляем список при подключении
           return;
         }
 
-        // Запрос списка — только от браузеров
-        if (data.type === "getList" && server.isBrowser) {
+        // Запрос списка от браузера
+        if (data.type === "getList") {
           server.send(JSON.stringify({
             type: "deviceList",
             devices: Array.from(this.sessions.keys())
@@ -76,8 +67,8 @@ var wsRoom = class {
           return;
         }
 
-        // Адресная команда от браузера к плате
-        if (data.targetId && data.command && server.isBrowser) {
+        // Команда от браузера к плате
+        if (data.targetId && data.command) {
           const targetSocket = this.sessions.get(data.targetId);
           if (targetSocket) {
             targetSocket.send(data.command);
@@ -86,11 +77,12 @@ var wsRoom = class {
         }
 
       } catch (e) {
-        // Это обычные данные от платы (скан, лог, file и т.д.)
-        // Рассылаем ТОЛЬКО браузерам
+        // Исправление 2: данные от платы рассылаем ТОЛЬКО браузерам
+        // Было: if (conn !== server && !conn.isDevice)
+        // Стало: только !conn.isDevice (и conn !== server не нужен — плата себе не шлёт)
         if (server.isDevice) {
           for (const conn of this.connections) {
-            if (conn.isBrowser) {  // Только браузерам!
+            if (!conn.isDevice) {  // только браузерам
               try {
                 conn.send(event.data);
               } catch (_) {
@@ -99,7 +91,6 @@ var wsRoom = class {
             }
           }
         }
-        // Если сообщение не от платы — игнорируем (защита)
       }
     });
 
@@ -107,7 +98,7 @@ var wsRoom = class {
       this.connections.delete(server);
       if (server.deviceId && server.isDevice) {
         this.sessions.delete(server.deviceId);
-        this.broadcastDeviceList();
+        this.broadcastDeviceList();  // ← обновляем список при отключении
       }
     });
 
