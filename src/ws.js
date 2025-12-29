@@ -8,7 +8,9 @@ var wsRoom = class {
     this.env = env;
     this.connections = new Set();
     this.sessions = new Map();
-    this.pingTimeouts = new Map(); // новый Map для таймаутов
+
+    // Запускаем проверку "живости" соединений плат
+    this.startHeartbeat();
   }
 
   broadcastDeviceList() {
@@ -28,6 +30,29 @@ var wsRoom = class {
     }
   }
 
+  // Проверка только плат — без ping/pong
+  startHeartbeat() {
+    setInterval(() => {
+      for (const conn of this.connections) {
+        if (conn.isDevice) {
+          try {
+            // Пробуем отправить пустое сообщение
+            // Если соединение разорвано — бросит ошибку
+            conn.send("");
+          } catch (e) {
+            // Соединение мертво — очищаем
+            console.log("Heartbeat: detected disconnected device", conn.deviceId);
+            this.connections.delete(conn);
+            if (conn.deviceId) {
+              this.sessions.delete(conn.deviceId);
+              this.broadcastDeviceList();
+            }
+          }
+        }
+      }
+    }, 15000); // каждые 15 секунд
+  }
+
   async fetch(request) {
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("Expected WebSocket", { status: 426 });
@@ -38,45 +63,7 @@ var wsRoom = class {
 
     this.connections.add(server);
 
-    // Новая функция: проверка жизни соединения
-    const schedulePing = () => {
-      const timeout = setTimeout(() => {
-        try {
-          server.send("ping");
-        } catch (e) {
-          // Если send бросил ошибку — соединение уже мёртвое
-          cleanup();
-        }
-      }, 10000); // пинг каждые 10 секунд
-
-      this.pingTimeouts.set(server, timeout);
-    };
-
-    const cleanup = () => {
-      clearTimeout(this.pingTimeouts.get(server));
-      this.pingTimeouts.delete(server);
-      this.connections.delete(server);
-      if (server.deviceId && server.isDevice) {
-        this.sessions.delete(server.deviceId);
-        this.broadcastDeviceList();
-      }
-    };
-
-    // Начинаем слать пинги сразу
-    schedulePing();
-
     server.addEventListener("message", (event) => {
-      if (event.data === "ping") {
-        server.send("pong");
-        return;
-      }
-      if (event.data === "pong") {
-        // Получили pong — планируем следующий пинг
-        clearTimeout(this.pingTimeouts.get(server));
-        schedulePing();
-        return;
-      }
-
       try {
         const data = JSON.parse(event.data);
 
@@ -105,7 +92,7 @@ var wsRoom = class {
         }
 
       } catch (e) {
-        // Данные от платы — рассылаем браузерам
+        // Обычные данные от платы — рассылаем браузерам
         if (server.isDevice) {
           for (const conn of this.connections) {
             if (!conn.isDevice) {
@@ -120,8 +107,13 @@ var wsRoom = class {
       }
     });
 
-    server.addEventListener("close", cleanup);
-    server.addEventListener("error", cleanup);
+    server.addEventListener("close", () => {
+      this.connections.delete(server);
+      if (server.deviceId && server.isDevice) {
+        this.sessions.delete(server.deviceId);
+        this.broadcastDeviceList();
+      }
+    });
 
     return new Response(null, { status: 101, webSocket: client });
   }
