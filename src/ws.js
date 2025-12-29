@@ -6,8 +6,8 @@ var wsRoom = class {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.connections = new Set();     // все подключения
-    this.sessions = new Map();        // deviceId → websocket (только платы)
+    this.connections = new Set();
+    this.sessions = new Map(); // deviceId → websocket (платы)
   }
 
   broadcastDeviceList() {
@@ -35,29 +35,26 @@ var wsRoom = class {
     const [client, server] = Object.values(new WebSocketPair());
     server.accept();
 
-    // По умолчанию считаем браузером — безопасность превыше всего
-    server.isBrowser = true;
+    // Изначально НЕ помечаем ни как браузер, ни как устройство
+    server.isBrowser = false;
     server.isDevice = false;
 
     this.connections.add(server);
 
-    server.addEventListener("message", async (event) => {
-      // Keep-alive пинг
+    server.addEventListener("message", (event) => {
       if (event.data === "ping") {
         server.send("pong");
         return;
       }
 
-      // Попробуем распарсить как JSON
       let parsed = null;
       try {
         parsed = JSON.parse(event.data);
       } catch (e) {
-        // Не JSON → это данные от платы (скан, лог и т.д.)
+        // Не JSON — данные от платы
         if (server.isDevice) {
-          // Рассылаем всем браузерам
           for (const conn of this.connections) {
-            if (conn.isBrowser && conn !== server) {
+            if (conn.isBrowser) {
               try {
                 conn.send(event.data);
               } catch (_) {
@@ -69,16 +66,16 @@ var wsRoom = class {
         return;
       }
 
-      // === JSON-обработка ===
+      // === JSON-сообщения ===
 
-      // Браузер явно подтверждает, что он браузер (наш клиент это делает)
+      // Веб-клиент явно объявляет себя браузером
       if (parsed.type === "register-browser") {
         server.isBrowser = true;
-        server.isDevice = false;
+        // НЕ устанавливаем isDevice = false — если это была плата, не мешаем
         return;
       }
 
-      // Запрос списка устройств — только от браузеров
+      // Запрос списка — только от браузеров
       if (parsed.type === "getList" && server.isBrowser) {
         server.send(JSON.stringify({
           type: "deviceList",
@@ -87,30 +84,41 @@ var wsRoom = class {
         return;
       }
 
-      // Регистрация платы — разрешена ТОЛЬКО если ещё не помечен как браузер
-      if (parsed.type === "register" && parsed.deviceId && !server.isBrowser) {
+      // Регистрация платы — разрешена всегда, если ещё не зарегистрирована
+      if (parsed.type === "register" && parsed.deviceId) {
+        // Защита: если уже помечен как браузер — запрещаем
+        if (server.isBrowser) {
+          server.close(1008, "Browsers cannot register as devices");
+          return;
+        }
+
+        // Регистрируем плату
+        if (server.isDevice && server.deviceId === parsed.deviceId) {
+          // Уже зарегистрирована с тем же ID — ок
+          return;
+        }
+
+        // Если была зарегистрирована под другим ID — удаляем старую
+        if (server.isDevice && server.deviceId) {
+          this.sessions.delete(server.deviceId);
+        }
+
         server.deviceId = parsed.deviceId;
         server.isDevice = true;
-        server.isBrowser = false;  // снимаем флаг браузера
+        server.isBrowser = false;
+
         this.sessions.set(parsed.deviceId, server);
         this.broadcastDeviceList();
         return;
       }
 
-      // Если браузер пытается зарегистрироваться как плата — закрываем соединение
-      if (parsed.type === "register" && server.isBrowser) {
-        server.close(1008, "Browsers cannot register as devices");
-        return;
-      }
-
-      // Команда от браузера к конкретной плате
+      // Команда от браузера к плате
       if (parsed.targetId && parsed.command && server.isBrowser) {
         const target = this.sessions.get(parsed.targetId);
         if (target) {
           try {
             target.send(parsed.command);
           } catch (e) {
-            // если плата отвалилась — удаляем из сессий
             this.sessions.delete(parsed.targetId);
             this.broadcastDeviceList();
           }
@@ -120,15 +128,6 @@ var wsRoom = class {
     });
 
     server.addEventListener("close", () => {
-      this.connections.delete(server);
-      if (server.isDevice && server.deviceId) {
-        this.sessions.delete(server.deviceId);
-        this.broadcastDeviceList();
-      }
-    });
-
-    server.addEventListener("error", () => {
-      // Аналогично close
       this.connections.delete(server);
       if (server.isDevice && server.deviceId) {
         this.sessions.delete(server.deviceId);
