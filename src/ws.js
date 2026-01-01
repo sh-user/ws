@@ -1,30 +1,29 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
-// --- DURABLE OBJECT: Логика управления комнатой ---
-class wsRoom {
+export class wsRoom {
   static { __name(this, "wsRoom"); }
 
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.connections = new Set(); 
-    this.sessions = new Map();    // deviceId -> WebSocket
+    this.connections = new Set(); // Все активные сокеты
+    this.sessions = new Map();    // deviceId -> WebSocket (только платы)
   }
 
-  // Удаление устройства и уведомление клиентов
+  // Метод для удаления устройства из всех списков
   handleDisconnect(socket) {
-    const wasInConnections = this.connections.delete(socket);
+    const wasRemoved = this.connections.delete(socket);
     if (socket.deviceId) {
       const wasInSessions = this.sessions.delete(socket.deviceId);
-      // Рассылаем список, только если что-то реально удалилось
-      if (wasInSessions || wasInConnections) {
+      // Если устройство реально удалено, уведомляем веб-интерфейсы
+      if (wasInSessions || wasRemoved) {
         this.broadcastDeviceList();
       }
     }
   }
 
-  // Рассылка списка активных плат всем веб-клиентам
+  // Рассылка актуального списка устройств всем веб-клиентам
   broadcastDeviceList() {
     const listMessage = JSON.stringify({
       type: "deviceList",
@@ -32,9 +31,10 @@ class wsRoom {
     });
 
     for (const conn of this.connections) {
+      // Отправляем список только тем, кто НЕ является устройством (т.е. браузерам)
       if (!conn.isDevice) {
         try {
-          if (conn.readyState === 1) {
+          if (conn.readyState === 1) { // 1 = OPEN
             conn.send(listMessage);
           } else {
             this.handleDisconnect(conn);
@@ -64,23 +64,24 @@ class wsRoom {
       try {
         const data = JSON.parse(event.data);
 
-        // 1. РЕГИСТРАЦИЯ УСТРОЙСТВА
+        // 1. РЕГИСТРАЦИЯ УСТРОЙСТВА (платы)
         if (data.type === "register" && data.deviceId) {
-          // ЗАЩИТА ОТ ЗАЛИПАНИЯ: Если ID уже есть в сети, удаляем старое соединение
+          // ПРОВЕРКА НА ДУБЛИКАТ: Если плата переподключилась, удаляем старый "призрачный" сокет
           const existing = this.sessions.get(data.deviceId);
           if (existing) {
             this.connections.delete(existing);
-            try { existing.close(1000, "Replaced by new connection"); } catch(e){}
+            try { existing.close(1000, "Replaced by new connection"); } catch(e) {}
           }
 
           server.deviceId = data.deviceId;
-          server.isDevice = true;
+          server.isDevice = true; // Пометка, что это плата
           this.sessions.set(data.deviceId, server);
+          
           this.broadcastDeviceList();
           return;
         }
 
-        // 2. ЗАПРОС СПИСКА (для веба)
+        // 2. ПОЛУЧЕНИЕ СПИСКА (для браузера)
         if (data.type === "getList") {
           server.send(JSON.stringify({
             type: "deviceList",
@@ -89,27 +90,31 @@ class wsRoom {
           return;
         }
 
-        // 3. АДРЕСНАЯ КОМАНДА
+        // 3. АДРЕСНАЯ ПЕРЕСЫЛКА (Команда от браузера к плате)
         if (data.targetId && data.command) {
-          const target = this.sessions.get(data.targetId);
-          if (target && target.readyState === 1) {
-            target.send(data.command);
-          } else if (target) {
-            this.handleDisconnect(target);
+          const targetSocket = this.sessions.get(data.targetId);
+          if (targetSocket && targetSocket.readyState === 1) {
+            targetSocket.send(data.command);
+          } else if (targetSocket) {
+            this.handleDisconnect(targetSocket);
           }
           return;
         }
       } catch (e) {
-        // Broadcast логов (текстовых данных) всем веб-клиентам
+        // Если пришел не JSON (например, логи от платы), пересылаем всем веб-клиентам
         for (const conn of this.connections) {
           if (conn !== server && !conn.isDevice) {
-            try { conn.send(event.data); } catch (err) { this.handleDisconnect(conn); }
+            try {
+              conn.send(event.data);
+            } catch (err) {
+              this.handleDisconnect(conn);
+            }
           }
         }
       }
     });
 
-    // Обработка физического обрыва связи
+    // Мгновенная очистка при закрытии или ошибке
     server.addEventListener("close", () => this.handleDisconnect(server));
     server.addEventListener("error", () => this.handleDisconnect(server));
 
