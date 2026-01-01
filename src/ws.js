@@ -1,29 +1,29 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
-export class wsRoom {
+class wsRoom {
   static { __name(this, "wsRoom"); }
 
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.connections = new Set(); // Все активные сокеты
-    this.sessions = new Map();    // deviceId -> WebSocket (только платы)
+    this.connections = new Set(); 
+    this.sessions = new Map(); // deviceId -> WebSocket
   }
 
-  // Метод для удаления устройства из всех списков
+  // Метод для очистки ресурсов при отключении
   handleDisconnect(socket) {
     const wasRemoved = this.connections.delete(socket);
     if (socket.deviceId) {
       const wasInSessions = this.sessions.delete(socket.deviceId);
-      // Если устройство реально удалено, уведомляем веб-интерфейсы
+      // Если устройство реально удалено, уведомляем веб-клиентов
       if (wasInSessions || wasRemoved) {
         this.broadcastDeviceList();
       }
     }
   }
 
-  // Рассылка актуального списка устройств всем веб-клиентам
+  // Рассылка списка устройств только веб-клиентам
   broadcastDeviceList() {
     const listMessage = JSON.stringify({
       type: "deviceList",
@@ -31,10 +31,9 @@ export class wsRoom {
     });
 
     for (const conn of this.connections) {
-      // Отправляем список только тем, кто НЕ является устройством (т.е. браузерам)
       if (!conn.isDevice) {
         try {
-          if (conn.readyState === 1) { // 1 = OPEN
+          if (conn.readyState === 1) { // OPEN
             conn.send(listMessage);
           } else {
             this.handleDisconnect(conn);
@@ -64,24 +63,23 @@ export class wsRoom {
       try {
         const data = JSON.parse(event.data);
 
-        // 1. РЕГИСТРАЦИЯ УСТРОЙСТВА (платы)
+        // 1. Регистрация устройства
         if (data.type === "register" && data.deviceId) {
-          // ПРОВЕРКА НА ДУБЛИКАТ: Если плата переподключилась, удаляем старый "призрачный" сокет
+          // ЗАЩИТА ОТ ЗАЛИПАНИЯ: Если ID уже есть, закрываем старую сессию
           const existing = this.sessions.get(data.deviceId);
           if (existing) {
             this.connections.delete(existing);
-            try { existing.close(1000, "Replaced by new connection"); } catch(e) {}
+            try { existing.close(1000, "Replaced by new connection"); } catch(e){}
           }
 
           server.deviceId = data.deviceId;
-          server.isDevice = true; // Пометка, что это плата
+          server.isDevice = true;
           this.sessions.set(data.deviceId, server);
-          
           this.broadcastDeviceList();
           return;
         }
 
-        // 2. ПОЛУЧЕНИЕ СПИСКА (для браузера)
+        // 2. Получение списка (только для веба)
         if (data.type === "getList") {
           server.send(JSON.stringify({
             type: "deviceList",
@@ -90,18 +88,18 @@ export class wsRoom {
           return;
         }
 
-        // 3. АДРЕСНАЯ ПЕРЕСЫЛКА (Команда от браузера к плате)
+        // 3. Адресная команда
         if (data.targetId && data.command) {
-          const targetSocket = this.sessions.get(data.targetId);
-          if (targetSocket && targetSocket.readyState === 1) {
-            targetSocket.send(data.command);
-          } else if (targetSocket) {
-            this.handleDisconnect(targetSocket);
+          const target = this.sessions.get(data.targetId);
+          if (target && target.readyState === 1) {
+            target.send(data.command);
+          } else if (target) {
+            this.handleDisconnect(target);
           }
           return;
         }
       } catch (e) {
-        // Если пришел не JSON (например, логи от платы), пересылаем всем веб-клиентам
+        // Обычный broadcast логов всем веб-клиентам
         for (const conn of this.connections) {
           if (conn !== server && !conn.isDevice) {
             try {
@@ -114,10 +112,23 @@ export class wsRoom {
       }
     });
 
-    // Мгновенная очистка при закрытии или ошибке
+    // Обработка обрывов соединения
     server.addEventListener("close", () => this.handleDisconnect(server));
     server.addEventListener("error", () => this.handleDisconnect(server));
 
     return new Response(null, { status: 101, webSocket: client });
   }
 }
+
+// ЭКСПОРТ ПО УМОЛЧАНИЮ (ENTRYPOINT)
+var ws_default = {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    const roomId = url.searchParams.get("room") || "default";
+    const id = env.WS_ROOM.idFromName(roomId);
+    const stub = env.WS_ROOM.get(id);
+    return stub.fetch(request);
+  }
+};
+
+export { ws_default as default, wsRoom };
