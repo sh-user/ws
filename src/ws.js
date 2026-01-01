@@ -1,7 +1,7 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
-class wsRoom {
+export class wsRoom {
   static { __name(this, "wsRoom"); }
 
   constructor(state, env) {
@@ -11,19 +11,16 @@ class wsRoom {
     this.sessions = new Map(); // deviceId -> WebSocket
   }
 
-  // Метод для очистки ресурсов при отключении
+  // Удаление сокета и уведомление остальных
   handleDisconnect(socket) {
-    const wasRemoved = this.connections.delete(socket);
+    this.connections.delete(socket);
     if (socket.deviceId) {
-      const wasInSessions = this.sessions.delete(socket.deviceId);
-      // Если устройство реально удалено, уведомляем веб-клиентов
-      if (wasInSessions || wasRemoved) {
-        this.broadcastDeviceList();
-      }
+      this.sessions.delete(socket.deviceId);
+      this.broadcastDeviceList();
     }
   }
 
-  // Рассылка списка устройств только веб-клиентам
+  // Рассылка списка активных устройств
   broadcastDeviceList() {
     const listMessage = JSON.stringify({
       type: "deviceList",
@@ -31,13 +28,10 @@ class wsRoom {
     });
 
     for (const conn of this.connections) {
-      if (!conn.isDevice) {
+      // Отправляем только веб-клиентам (у которых isDevice не true)
+      if (!conn.isDevice && conn.readyState === 1) {
         try {
-          if (conn.readyState === 1) { // OPEN
-            conn.send(listMessage);
-          } else {
-            this.handleDisconnect(conn);
-          }
+          conn.send(listMessage);
         } catch (e) {
           this.handleDisconnect(conn);
         }
@@ -63,23 +57,23 @@ class wsRoom {
       try {
         const data = JSON.parse(event.data);
 
-        // 1. Регистрация устройства
+        // 1. Когда заходит плата (RP2040)
         if (data.type === "register" && data.deviceId) {
-          // ЗАЩИТА ОТ ЗАЛИПАНИЯ: Если ID уже есть, закрываем старую сессию
-          const existing = this.sessions.get(data.deviceId);
-          if (existing) {
-            this.connections.delete(existing);
-            try { existing.close(1000, "Replaced by new connection"); } catch(e){}
+          // Если старая сессия этой платы еще висит — удаляем её
+          const oldSocket = this.sessions.get(data.deviceId);
+          if (oldSocket) {
+            this.connections.delete(oldSocket);
+            try { oldSocket.close(); } catch(e){}
           }
 
           server.deviceId = data.deviceId;
           server.isDevice = true;
           this.sessions.set(data.deviceId, server);
-          this.broadcastDeviceList();
+          this.broadcastDeviceList(); // Сразу обновляем список у всех браузеров
           return;
         }
 
-        // 2. Получение списка (только для веба)
+        // 2. Когда браузер запрашивает список (при загрузке страницы)
         if (data.type === "getList") {
           server.send(JSON.stringify({
             type: "deviceList",
@@ -88,7 +82,7 @@ class wsRoom {
           return;
         }
 
-        // 3. Адресная команда
+        // 3. Команды от браузера к плате
         if (data.targetId && data.command) {
           const target = this.sessions.get(data.targetId);
           if (target && target.readyState === 1) {
@@ -99,20 +93,15 @@ class wsRoom {
           return;
         }
       } catch (e) {
-        // Обычный broadcast логов всем веб-клиентам
+        // Обычная пересылка текстовых логов от плат в браузеры
         for (const conn of this.connections) {
-          if (conn !== server && !conn.isDevice) {
-            try {
-              conn.send(event.data);
-            } catch (err) {
-              this.handleDisconnect(conn);
-            }
+          if (conn !== server && !conn.isDevice && conn.readyState === 1) {
+            try { conn.send(event.data); } catch (err) { this.handleDisconnect(conn); }
           }
         }
       }
     });
 
-    // Обработка обрывов соединения
     server.addEventListener("close", () => this.handleDisconnect(server));
     server.addEventListener("error", () => this.handleDisconnect(server));
 
@@ -120,9 +109,9 @@ class wsRoom {
   }
 }
 
-// ЭКСПОРТ ПО УМОЛЧАНИЮ (ENTRYPOINT)
+// Прокси-воркер для перенаправления запросов в Durable Object
 var ws_default = {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     const url = new URL(request.url);
     const roomId = url.searchParams.get("room") || "default";
     const id = env.WS_ROOM.idFromName(roomId);
@@ -131,4 +120,4 @@ var ws_default = {
   }
 };
 
-export { ws_default as default, wsRoom };
+export { ws_default as default };
