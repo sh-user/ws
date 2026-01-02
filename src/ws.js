@@ -74,8 +74,8 @@ var wsRoom = class {
             try { socket.send("?"); } catch(e) {}
           }
 
-          // Ждем 300мс ответов "id:..." от плат
-          await new Promise(r => setTimeout(r, 1000));
+          // Ждем 500мс ответов "id:..." от плат
+          await new Promise(r => setTimeout(r, 500));
 
           const activeDevices = [];
           for (const [id, socket] of this.sessions.entries()) {
@@ -83,10 +83,10 @@ var wsRoom = class {
             const isAlive = socket.readyState === 1 && (Date.now() - (socket.lastActive || 0) < 500);
             if (isAlive) {
               activeDevices.push(id);
-            } else {
-              this.sessions.delete(id);
-              this.connections.delete(socket);
-            }
+            } //else {
+              //this.sessions.delete(id);
+              //this.connections.delete(socket);
+            //}
           }
 
           // Отправляем запросившему свежий список
