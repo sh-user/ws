@@ -51,6 +51,19 @@ var wsRoom = class {
         }
         // 2. Запрос списка (только для веб-клиентов)
         if (data.type === "getList") {
+
+                  // Создаем актуальный список, проверяя статус каждого сокета на лету
+  const activeDevices = [];
+  
+  for (const [deviceId, socket] of this.sessions.entries()) {
+    if (socket.readyState === 1) { // 1 — это WebSocket.OPEN
+      activeDevices.push(deviceId);
+    } else {
+      // Если сокет не открыт, удаляем его из памяти, чтобы не проверять в следующий раз
+      this.sessions.delete(deviceId);
+      this.connections.delete(socket);
+    }
+  }
           server.send(JSON.stringify({
             type: "deviceList",
             devices: Array.from(this.sessions.keys())
