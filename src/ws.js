@@ -51,6 +51,8 @@ var wsRoom = class {
         }
         // 2. Запрос списка (только для веб-клиентов)
         if (data.type === "getList") {
+          // Перед отправкой проверяем, кто реально в сети
+          this.cleanDeadSessions();
           server.send(JSON.stringify({
             type: "deviceList",
             devices: Array.from(this.sessions.keys())
