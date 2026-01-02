@@ -52,18 +52,20 @@ var wsRoom = class {
         // 2. Запрос списка (только для веб-клиентов)
         if (data.type === "getList") {
 
+  // 1. Проходим по всем сохраненным сессиям [cite: 3]
   for (const [deviceId, socket] of this.sessions.entries()) {
     try {
-      // Попытка отправить пустой пинг. 
-      // Если плата реально отключена, это вызовет исключение или смену readyState
-      socket.send("ping"); 
+      // Попытка отправить системный ping. 
+      // Если соединение реально разорвано, вызов .send() или обращение к сокету 
+      // заставит систему обновить readyState.
+      socket.send(JSON.stringify({ type: "internal_ping" })); 
     } catch (e) {
-      // Если отправка не удалась — удаляем устройство сразу
+      // Если отправка не удалась, сразу удаляем [cite: 4]
       this.sessions.delete(deviceId);
       this.connections.delete(socket);
     }
   }
-  // Финальная фильтрация по состоянию после попытки отправки
+ // 3. Формируем список только из тех, кто остался в статусе OPEN (1) 
   const activeDevices = Array.from(this.sessions.entries())
     .filter(([_, socket]) => socket.readyState === 1)
     .map(([id, _]) => id);
