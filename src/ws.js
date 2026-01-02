@@ -6,8 +6,26 @@ var wsRoom = class {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.connections = new Set();
-    this.sessions = new Map();
+    this.connections = new Set(); // Все активные соединения
+    this.sessions = new Map();    // Только зарегистрированные платы [deviceId -> socket]
+  }
+
+  // Рассылка списка устройств всем веб-клиентам (браузерам)
+  broadcastDeviceList(deviceArray) {
+    const listMessage = JSON.stringify({
+      type: "deviceList",
+      devices: deviceArray || Array.from(this.sessions.keys())
+    });
+    
+    for (const conn of this.connections) {
+      if (!conn.isDevice && conn.readyState === 1) {
+        try {
+          conn.send(listMessage);
+        } catch (e) {
+          this.connections.delete(conn);
+        }
+      }
+    }
   }
 
   async fetch(request) {
@@ -17,41 +35,53 @@ var wsRoom = class {
     const [client, server] = Object.values(new WebSocketPair());
     server.accept();
     this.connections.add(server);
-    server.isDevice = false;
+    
+    server.isDevice = false; // По умолчанию считаем браузером
+    server.deviceId = null;
+    server.lastActive = Date.now();
 
     server.addEventListener("message", async (event) => {
-      // ПЛАТА ОТВЕТИЛА: фиксируем время последнего ответа
-      server.lastActive = Date.now();
+      const message = event.data;
+
+      // 1. ПРОВЕРКА ОТВЕТА ОТ ПЛАТЫ (на ваш запрос "?")
+      if (typeof message === "string" && message.startsWith("id:")) {
+        const receivedId = message.replace("id:", "");
+        if (server.deviceId === receivedId) {
+          server.lastActive = Date.now();
+        }
+        return;
+      }
 
       try {
-        const data = JSON.parse(event.data);
+        const data = JSON.parse(message);
 
-        // 1. РЕГИСТРАЦИЯ ПЛАТЫ
+        // 2. РЕГИСТРАЦИЯ ПЛАТЫ (вызывается вашей sendRegistration())
         if (data.type === "register" && data.deviceId) {
           server.deviceId = data.deviceId;
           server.isDevice = true;
+          server.lastActive = Date.now();
           this.sessions.set(data.deviceId, server);
+          
+          // Мгновенно обновляем список у всех при появлении новой платы
+          this.broadcastDeviceList();
           return;
         }
 
-        // 2. ЗАПРОС СПИСКА (С ПРОВЕРКОЙ)
+        // 3. ЗАПРОС СПИСКА ОТ БРАУЗЕРА (С ПЕРЕКЛИЧКОЙ)
         if (data.type === "getList") {
-          const now = Date.now();
-          
-          // Рассылаем запрос на проверку всем устройствам
+          // Рассылаем всем платам "?"
           for (const [id, socket] of this.sessions.entries()) {
-            try {
-              socket.send("?"); // Просим плату отозваться любым сообщением
-            } catch(e) {}
+            try { socket.send("?"); } catch(e) {}
           }
 
-          // Даем платам 300мс на ответ
+          // Ждем 300мс ответов "id:..." от плат
           await new Promise(r => setTimeout(r, 300));
 
           const activeDevices = [];
           for (const [id, socket] of this.sessions.entries()) {
-            // Если плата ответила в последние 500мс и сокет открыт
-            if (socket.readyState === 1 && (Date.now() - (socket.lastActive || 0) < 500)) {
+            // Если плата ответила недавно и сокет открыт
+            const isAlive = socket.readyState === 1 && (Date.now() - (socket.lastActive || 0) < 500);
+            if (isAlive) {
               activeDevices.push(id);
             } else {
               this.sessions.delete(id);
@@ -59,27 +89,29 @@ var wsRoom = class {
             }
           }
 
-          server.send(JSON.stringify({
-            type: "deviceList",
-            devices: activeDevices
-          }));
+          // Отправляем запросившему свежий список
+          server.send(JSON.stringify({ type: "deviceList", devices: activeDevices }));
+          
+          // Опционально: синхронизируем список у всех остальных
+          this.broadcastDeviceList(activeDevices);
           return;
         }
 
-        // 3. КОМАНДЫ
+        // 4. АДРЕСНАЯ КОМАНДА (Браузер -> Плата)
         if (data.targetId && data.command) {
-          const target = this.sessions.get(data.targetId);
-          if (target && target.readyState === 1) {
-            target.send(data.command);
+          const targetSocket = this.sessions.get(data.targetId);
+          if (targetSocket && targetSocket.readyState === 1) {
+            targetSocket.send(data.command);
           }
           return;
         }
 
       } catch (e) {
-        // Обычный чат/broadcast
+        // 5. ОБЫЧНЫЙ BROADCAST (Чат / Логи)
+        // Пересылаем всем, кроме отправителя и плат
         for (const conn of this.connections) {
           if (conn !== server && !conn.isDevice && conn.readyState === 1) {
-            conn.send(event.data);
+            conn.send(message);
           }
         }
       }
@@ -87,7 +119,10 @@ var wsRoom = class {
 
     server.addEventListener("close", () => {
       this.connections.delete(server);
-      if (server.deviceId) this.sessions.delete(server.deviceId);
+      if (server.deviceId) {
+        this.sessions.delete(server.deviceId);
+        this.broadcastDeviceList();
+      }
     });
 
     return new Response(null, { status: 101, webSocket: client });
@@ -95,9 +130,10 @@ var wsRoom = class {
 };
 
 var ws_default = {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const roomId = url.searchParams.get("room") || "default";
+    // Убедитесь, что в wrangler.toml прописано именно WS_ROOM (или исправьте тут)
     const id = env.WS_ROOM.idFromName(roomId);
     const stub = env.WS_ROOM.get(id);
     return stub.fetch(request);
