@@ -120,4 +120,5 @@ var ws_default = {
   }
 };
 
-export { ws_default as default };
+// ОБЯЗАТЕЛЬНО: экспортируем и класс, и воркер
+export { ws_default as default, wsRoom };
