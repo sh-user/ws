@@ -75,7 +75,7 @@ var wsRoom = class {
           }
 
           // Ждем 300мс ответов "id:..." от плат
-          await new Promise(r => setTimeout(r, 300));
+          await new Promise(r => setTimeout(r, 1000));
 
           const activeDevices = [];
           for (const [id, socket] of this.sessions.entries()) {
