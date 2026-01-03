@@ -80,18 +80,26 @@ class wsRoom {
         // РЕГИСТРАЦИЯ ПЛАТЫ
         // Важно: в прошивке должно быть: {"type":"register", "deviceId":"..."}
         if (json.type === "register" && json.deviceId) {
-          server.lastActive = Date.now(); // Обновляем время активности устройства
-          
-          const existing = this.sessions.get(json.deviceId);
-          if (existing && existing !== server) {
-            existing.close(1000, "New session started");
-            this.connections.delete(existing);
-          }
-          
-          server.deviceId = json.deviceId;
+          server.lastActive = Date.now();
           server.isDevice = true;
-          this.sessions.set(json.deviceId, server);
-          this.broadcastDeviceList();
+          server.deviceId = json.deviceId;
+          // Проверяем, есть ли уже такая плата в списке сессий
+          const existing = this.sessions.get(json.deviceId);
+          // ЛОГИКА: Рассылаем список ТОЛЬКО если это новое соединение
+          if (existing !== server) {
+            // Если под этим ID был другой сокет — удаляем его
+            if (existing) {
+              try { existing.close(1000, "New session started"); } catch(e) {}
+              this.connections.delete(existing);
+            }
+            // Сохраняем новую активную сессию
+            this.sessions.set(json.deviceId, server);
+            // Сообщаем браузерам, что состав устройств изменился
+            this.broadcastDeviceList();
+            console.log(`Device registered: ${json.deviceId}`);
+          } 
+          // Если existing === server, значит это просто ответ на "?" (heartbeat).
+          // Мы уже обновили lastActive выше, поэтому просто выходим без рассылки списка.
           return;
         }
 
