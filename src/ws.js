@@ -12,7 +12,6 @@ class wsRoom {
     this.sessions = new Map();    
   }
 
-  // Фоновая очистка и проверка связи
   async alarm() {
     const now = Date.now();
     let hasChanges = false;
@@ -25,14 +24,12 @@ class wsRoom {
         continue;
       }
 
-      // Если плата молчит > 40 сек — удаляем из списка активных
       if (now - (socket.lastActive || 0) > 40000) {
         socket.close(1011, "Heartbeat timeout");
         this.sessions.delete(id);
         this.connections.delete(socket);
         hasChanges = true;
       } else {
-        // Отправляем пинг. Плата должна ответить JSON-ом с типом "register"
         try { socket.send("?"); } catch (e) {}
       }
     }
@@ -68,42 +65,38 @@ class wsRoom {
     }
 
     server.addEventListener("message", async (msg) => {
-      // ИСПРАВЛЕНИЕ: Декодируем данные, так как W5500 может слать бинарный поток
       const dataString = typeof msg.data === "string" ? msg.data : new TextDecoder().decode(msg.data);
       
-      // Если это просто эхо старого протокола "id:", игнорируем
       if (dataString.startsWith("id:")) return;
 
       try {
         const json = JSON.parse(dataString);
 
-        // РЕГИСТРАЦИЯ ПЛАТЫ
-        // Важно: в прошивке должно быть: {"type":"register", "deviceId":"..."}
+        // 1. РЕГИСТРАЦИЯ ПЛАТЫ
         if (json.type === "register" && json.deviceId) {
           server.lastActive = Date.now();
           server.isDevice = true;
           server.deviceId = json.deviceId;
-          // Проверяем, есть ли уже такая плата в списке сессий
+          
           const existing = this.sessions.get(json.deviceId);
-          // ЛОГИКА: Рассылаем список ТОЛЬКО если это новое соединение
           if (existing !== server) {
-            // Если под этим ID был другой сокет — удаляем его
             if (existing) {
               try { existing.close(1000, "New session started"); } catch(e) {}
               this.connections.delete(existing);
             }
-            // Сохраняем новую активную сессию
             this.sessions.set(json.deviceId, server);
-            // Сообщаем браузерам, что состав устройств изменился
             this.broadcastDeviceList();
-            console.log(`Device registered: ${json.deviceId}`);
           } 
-          // Если existing === server, значит это просто ответ на "?" (heartbeat).
-          // Мы уже обновили lastActive выше, поэтому просто выходим без рассылки списка.
           return;
         }
 
-        // ЗАПРОС СПИСКА (от браузера)
+        // 2. ВЫБОР ПЛАТЫ БРАУЗЕРОМ (Новое)
+        if (json.type === "selectDevice") {
+          server.selectedDeviceId = json.deviceId;
+          return;
+        }
+
+        // 3. ЗАПРОС СПИСКА
         if (json.type === "getList") {
           server.send(JSON.stringify({ 
             type: "deviceList", 
@@ -112,23 +105,26 @@ class wsRoom {
           return;
         }
 
-        // ПЕРЕСЫЛКА КОМАНДЫ (от браузера к конкретной плате)
+        // 4. КОМАНДЫ
         if (json.targetId && json.command) {
           const target = this.sessions.get(json.targetId);
           if (target?.readyState === 1) target.send(json.command);
           return;
         }
       } catch (e) {
-        // Если это НЕ JSON — значит это поток данных сканирования от tinySA
+        // ОБРАБОТКА ДАННЫХ СКАНЕРА
         if (server.isDevice) {
-          server.lastActive = Date.now(); // Любые данные от платы считаем за активность
-        }
-
-        // Рассылаем сырые данные всем браузерам
-        for (const c of this.connections) {
-          if (c !== server && !c.isDevice && c.readyState === 1) {
-            try { c.send(dataString); } catch(err) {}
+          server.lastActive = Date.now();
+          
+          // Рассылаем данные ТОЛЬКО тем браузерам, которые выбрали ЭТУ плату
+          for (const c of this.connections) {
+            if (!c.isDevice && c.readyState === 1 && c.selectedDeviceId === server.deviceId) {
+              try { c.send(dataString); } catch(err) {}
+            }
           }
+        } else {
+            // Если пришли данные, а ID нет (сервер перезагружен) - просим ID
+            try { server.send("?"); } catch(err) {}
         }
       }
     });
@@ -145,7 +141,6 @@ class wsRoom {
   }
 }
 
-// --- ЭКСПОРТ ДЛЯ WORKER ---
 const ws_default = {
   async fetch(request, env) {
     const url = new URL(request.url);
