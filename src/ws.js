@@ -25,13 +25,14 @@ class wsRoom {
         continue;
       }
 
-      // Если плата молчит > 40 сек — удаляем
+      // Если плата молчит > 40 сек — удаляем из списка активных
       if (now - (socket.lastActive || 0) > 40000) {
         socket.close(1011, "Heartbeat timeout");
         this.sessions.delete(id);
         this.connections.delete(socket);
         hasChanges = true;
       } else {
+        // Отправляем пинг. Плата должна ответить JSON-ом с типом "register"
         try { socket.send("?"); } catch (e) {}
       }
     }
@@ -67,22 +68,26 @@ class wsRoom {
     }
 
     server.addEventListener("message", async (msg) => {
-      const dataString = msg.data;
-      server.lastActive = Date.now();
-
-      if (typeof dataString === "string" && dataString.startsWith("id:")) {
-        return; 
-      }
+      // ИСПРАВЛЕНИЕ: Декодируем данные, так как W5500 может слать бинарный поток
+      const dataString = typeof msg.data === "string" ? msg.data : new TextDecoder().decode(msg.data);
+      
+      // Если это просто эхо старого протокола "id:", игнорируем
+      if (dataString.startsWith("id:")) return;
 
       try {
         const json = JSON.parse(dataString);
 
+        // РЕГИСТРАЦИЯ ПЛАТЫ
+        // Важно: в прошивке должно быть: {"type":"register", "deviceId":"..."}
         if (json.type === "register" && json.deviceId) {
+          server.lastActive = Date.now(); // Обновляем время активности устройства
+          
           const existing = this.sessions.get(json.deviceId);
           if (existing && existing !== server) {
             existing.close(1000, "New session started");
             this.connections.delete(existing);
           }
+          
           server.deviceId = json.deviceId;
           server.isDevice = true;
           this.sessions.set(json.deviceId, server);
@@ -90,6 +95,7 @@ class wsRoom {
           return;
         }
 
+        // ЗАПРОС СПИСКА (от браузера)
         if (json.type === "getList") {
           server.send(JSON.stringify({ 
             type: "deviceList", 
@@ -98,14 +104,23 @@ class wsRoom {
           return;
         }
 
+        // ПЕРЕСЫЛКА КОМАНДЫ (от браузера к конкретной плате)
         if (json.targetId && json.command) {
           const target = this.sessions.get(json.targetId);
           if (target?.readyState === 1) target.send(json.command);
           return;
         }
       } catch (e) {
+        // Если это НЕ JSON — значит это поток данных сканирования от tinySA
+        if (server.isDevice) {
+          server.lastActive = Date.now(); // Любые данные от платы считаем за активность
+        }
+
+        // Рассылаем сырые данные всем браузерам
         for (const c of this.connections) {
-          if (c !== server && !c.isDevice && c.readyState === 1) c.send(dataString);
+          if (c !== server && !c.isDevice && c.readyState === 1) {
+            try { c.send(dataString); } catch(err) {}
+          }
         }
       }
     });
