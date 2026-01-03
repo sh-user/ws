@@ -1,118 +1,111 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
-var wsRoom = class {
+// --- КЛАСС DURABLE OBJECT ---
+class wsRoom {
   static { __name(this, "wsRoom"); }
+  
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.connections = new Set(); // Все активные соединения
-    this.sessions = new Map();    // Только зарегистрированные платы [deviceId -> socket]
+    this.connections = new Set(); 
+    this.sessions = new Map();    
   }
 
-  // Рассылка списка устройств всем веб-клиентам (браузерам)
-  broadcastDeviceList(deviceArray) {
-    const listMessage = JSON.stringify({
+  // Фоновая очистка и проверка связи
+  async alarm() {
+    const now = Date.now();
+    let hasChanges = false;
+
+    for (const [id, socket] of this.sessions.entries()) {
+      if (socket.readyState !== 1) {
+        this.sessions.delete(id);
+        this.connections.delete(socket);
+        hasChanges = true;
+        continue;
+      }
+
+      // Если плата молчит > 40 сек — удаляем
+      if (now - (socket.lastActive || 0) > 40000) {
+        socket.close(1011, "Heartbeat timeout");
+        this.sessions.delete(id);
+        this.connections.delete(socket);
+        hasChanges = true;
+      } else {
+        try { socket.send("?"); } catch (e) {}
+      }
+    }
+
+    if (hasChanges) this.broadcastDeviceList();
+    await this.state.storage.setAlarm(Date.now() + 20000);
+  }
+
+  broadcastDeviceList() {
+    const list = JSON.stringify({
       type: "deviceList",
-      devices: deviceArray || Array.from(this.sessions.keys())
+      devices: Array.from(this.sessions.keys())
     });
-    
     for (const conn of this.connections) {
       if (!conn.isDevice && conn.readyState === 1) {
-        try {
-          conn.send(listMessage);
-        } catch (e) {
-          this.connections.delete(conn);
-        }
+        try { conn.send(list); } catch (e) {}
       }
     }
   }
 
   async fetch(request) {
-    if (request.headers.get("Upgrade") !== "websocket") {
-      return new Response("Expected WebSocket", { status: 426 });
-    }
+    if (request.headers.get("Upgrade") !== "websocket") return new Response("Expected WS", { status: 426 });
+
     const [client, server] = Object.values(new WebSocketPair());
     server.accept();
+
     this.connections.add(server);
-    
-    server.isDevice = false; // По умолчанию считаем браузером
-    server.deviceId = null;
     server.lastActive = Date.now();
+    server.isDevice = false;
 
-    server.addEventListener("message", async (event) => {
-      const message = event.data;
+    if (!await this.state.storage.getAlarm()) {
+      await this.state.storage.setAlarm(Date.now() + 10000);
+    }
 
-      // 1. ПРОВЕРКА ОТВЕТА ОТ ПЛАТЫ (на ваш запрос "?")
-      if (typeof message === "string" && message.startsWith("id:")) {
-        const receivedId = message.replace("id:", "");
-        if (server.deviceId === receivedId) {
-          server.lastActive = Date.now();
-        }
-        return;
+    server.addEventListener("message", async (msg) => {
+      const dataString = msg.data;
+      server.lastActive = Date.now();
+
+      if (typeof dataString === "string" && dataString.startsWith("id:")) {
+        return; 
       }
 
       try {
-        const data = JSON.parse(message);
+        const json = JSON.parse(dataString);
 
-        // 2. РЕГИСТРАЦИЯ ПЛАТЫ (вызывается вашей sendRegistration())
-        if (data.type === "register" && data.deviceId) {
-          server.deviceId = data.deviceId;
+        if (json.type === "register" && json.deviceId) {
+          const existing = this.sessions.get(json.deviceId);
+          if (existing && existing !== server) {
+            existing.close(1000, "New session started");
+            this.connections.delete(existing);
+          }
+          server.deviceId = json.deviceId;
           server.isDevice = true;
-          server.lastActive = Date.now();
-          this.sessions.set(data.deviceId, server);
-          
-          // Мгновенно обновляем список у всех при появлении новой платы
+          this.sessions.set(json.deviceId, server);
           this.broadcastDeviceList();
           return;
         }
 
-        // 3. ЗАПРОС СПИСКА ОТ БРАУЗЕРА (С ПЕРЕКЛИЧКОЙ)
-        if (data.type === "getList") {
-          // Рассылаем всем платам "?"
-          for (const [id, socket] of this.sessions.entries()) {
-            try { socket.send("?"); } catch(e) {}
-          }
-
-          // Ждем 500мс ответов "id:..." от плат
-          await new Promise(r => setTimeout(r, 500));
-
-          const activeDevices = [];
-          for (const [id, socket] of this.sessions.entries()) {
-            // Если плата ответила недавно и сокет открыт
-            const isAlive = socket.readyState === 1 && (Date.now() - (socket.lastActive || 0) < 500);
-            if (isAlive) {
-              activeDevices.push(id);
-            } //else {
-              //this.sessions.delete(id);
-              //this.connections.delete(socket);
-            //}
-          }
-
-          // Отправляем запросившему свежий список
-          server.send(JSON.stringify({ type: "deviceList", devices: activeDevices }));
-          
-          // Опционально: синхронизируем список у всех остальных
-          this.broadcastDeviceList(activeDevices);
+        if (json.type === "getList") {
+          server.send(JSON.stringify({ 
+            type: "deviceList", 
+            devices: Array.from(this.sessions.keys()) 
+          }));
           return;
         }
 
-        // 4. АДРЕСНАЯ КОМАНДА (Браузер -> Плата)
-        if (data.targetId && data.command) {
-          const targetSocket = this.sessions.get(data.targetId);
-          if (targetSocket && targetSocket.readyState === 1) {
-            targetSocket.send(data.command);
-          }
+        if (json.targetId && json.command) {
+          const target = this.sessions.get(json.targetId);
+          if (target?.readyState === 1) target.send(json.command);
           return;
         }
-
       } catch (e) {
-        // 5. ОБЫЧНЫЙ BROADCAST (Чат / Логи)
-        // Пересылаем всем, кроме отправителя и плат
-        for (const conn of this.connections) {
-          if (conn !== server && !conn.isDevice && conn.readyState === 1) {
-            conn.send(message);
-          }
+        for (const c of this.connections) {
+          if (c !== server && !c.isDevice && c.readyState === 1) c.send(dataString);
         }
       }
     });
@@ -127,16 +120,14 @@ var wsRoom = class {
 
     return new Response(null, { status: 101, webSocket: client });
   }
-};
+}
 
-var ws_default = {
-  async fetch(request, env, ctx) {
+// --- ЭКСПОРТ ДЛЯ WORKER ---
+const ws_default = {
+  async fetch(request, env) {
     const url = new URL(request.url);
-    const roomId = url.searchParams.get("room") || "default";
-    // Убедитесь, что в wrangler.toml прописано именно WS_ROOM (или исправьте тут)
-    const id = env.WS_ROOM.idFromName(roomId);
-    const stub = env.WS_ROOM.get(id);
-    return stub.fetch(request);
+    const id = env.WS_ROOM.idFromName(url.searchParams.get("room") || "default");
+    return env.WS_ROOM.get(id).fetch(request);
   }
 };
 
