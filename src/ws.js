@@ -59,6 +59,7 @@ class wsRoom {
     this.connections.add(server);
     server.lastActive = Date.now();
     server.isDevice = false;
+    this.broadcastDeviceList();
 
     if (!await this.state.storage.getAlarm()) {
       await this.state.storage.setAlarm(Date.now() + 10000);
@@ -93,15 +94,6 @@ class wsRoom {
         // 2. ВЫБОР ПЛАТЫ БРАУЗЕРОМ (Новое)
         if (json.type === "selectDevice") {
           server.selectedDeviceId = json.deviceId;
-          return;
-        }
-
-        // 3. ЗАПРОС СПИСКА
-        if (json.type === "getList") {
-          server.send(JSON.stringify({ 
-            type: "deviceList", 
-            devices: Array.from(this.sessions.keys()) 
-          }));
           return;
         }
 
