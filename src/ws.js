@@ -67,12 +67,8 @@ class wsRoom {
 
     server.addEventListener("message", async (msg) => {
       const dataString = typeof msg.data === "string" ? msg.data : new TextDecoder().decode(msg.data);
-      
-      if (dataString.startsWith("id:")) return;
-
       try {
         const json = JSON.parse(dataString);
-
         // 1. РЕГИСТРАЦИЯ ПЛАТЫ
         if (json.type === "register" && json.deviceId) {
           server.lastActive = Date.now();
