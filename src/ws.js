@@ -71,6 +71,18 @@ class wsRoom {
       if (dataString.startsWith("id:")) return;
       try {
         const json = JSON.parse(dataString);
+
+        if (json.type === 'resetAllConnections') {
+  // Закрываем сокеты и очищаем память
+  this.sessions.forEach(s => s.close(1000, "Reset"));
+  this.sessions.clear();
+  this.connections.clear();
+  
+  // Уведомляем интерфейс (отправит пустой список устройств)
+  this.broadcastDeviceList();
+  return;
+}
+        
         // 1. РЕГИСТРАЦИЯ ПЛАТЫ
         if (json.type === "register" && json.deviceId) {
           server.isDevice = true;
