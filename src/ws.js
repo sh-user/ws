@@ -24,7 +24,7 @@ class wsRoom {
         continue;
       }
 
-      if (now - (socket.lastActive || 0) > 40000) {
+      if (now - (socket.lastActive || 0) > 35000) {
         socket.close(1011, "Heartbeat timeout");
         this.sessions.delete(id);
         this.connections.delete(socket);
@@ -35,7 +35,7 @@ class wsRoom {
     }
 
     if (hasChanges) this.broadcastDeviceList();
-    await this.state.storage.setAlarm(Date.now() + 20000);
+    await this.state.storage.setAlarm(Date.now() + 10000);
   }
 
   broadcastDeviceList() {
