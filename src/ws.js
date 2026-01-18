@@ -83,22 +83,34 @@ class wsRoom {
   return;
 }
         
-        // 1. РЕГИСТРАЦИЯ ПЛАТЫ
-        if (json.type === "register" && json.deviceId) {
-          server.isDevice = true;
-          server.deviceId = json.deviceId;
-          
-          const existing = this.sessions.get(json.deviceId);
-          if (existing !== server) {
-            if (existing) {
-              try { existing.close(1000, "New session started"); } catch(e) {}
-              this.connections.delete(existing);
-            }
-            this.sessions.set(json.deviceId, server);
-            this.broadcastDeviceList();
-          } 
-          return;
+// 1. РЕГИСТРАЦИЯ ПЛАТЫ
+if (json.type === "register" && json.deviceId) {
+    const existing = this.sessions.get(json.deviceId);
+
+    // Если это действительно НОВОЕ соединение (а не повторный пакет от того же сокета)
+    if (existing !== server) {
+        if (existing) {
+            // ВАЖНО: сначала удаляем старое из мапы сессий, чтобы 'close' не вызвал пустой broadcast
+            this.sessions.delete(json.deviceId); 
+            try { 
+                existing.close(1000, "New session started"); 
+            } catch(e) {}
+            this.connections.delete(existing);
         }
+
+        // Теперь привязываем данные к новому сокету
+        server.isDevice = true;
+        server.deviceId = json.deviceId;
+        server.lastActive = Date.now(); // полезно для таймаутов
+
+        this.sessions.set(json.deviceId, server);
+        this.broadcastDeviceList();
+    } else {
+        // Если сокет тот же, просто обновляем время активности
+        server.lastActive = Date.now();
+    }
+    return;
+}
 
         // 2. ВЫБОР ПЛАТЫ БРАУЗЕРОМ (Новое)
         if (json.type === "selectDevice") {
