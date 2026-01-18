@@ -143,12 +143,15 @@ if (json.type === "register" && json.deviceId) {
     });
 
     server.addEventListener("close", () => {
-      this.connections.delete(server);
-      if (server.deviceId) {
-        this.sessions.delete(server.deviceId);
-        this.broadcastDeviceList();
-      }
-    });
+  this.connections.delete(server);
+  // ПРОВЕРКА: Удаляем ID из сессий ТОЛЬКО если в мапе лежит 
+  // именно этот закрывающийся объект (server).
+  // Если там уже лежит новый сокет (после переподключения) — не трогаем!
+  if (server.deviceId && this.sessions.get(server.deviceId) === server) {
+    this.sessions.delete(server.deviceId);
+    this.broadcastDeviceList();
+  }
+});
 
     return new Response(null, { status: 101, webSocket: client });
   }
