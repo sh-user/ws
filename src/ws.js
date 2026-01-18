@@ -24,7 +24,7 @@ class wsRoom {
         continue;
       }
 
-      if (now - (socket.lastActive || 0) > 35000) {
+      if (now - (socket.lastActive || 0) > 25000) {
         socket.close(1011, "Heartbeat timeout");
         this.sessions.delete(id);
         this.connections.delete(socket);
@@ -35,7 +35,7 @@ class wsRoom {
     }
 
     if (hasChanges) this.broadcastDeviceList();
-    await this.state.storage.setAlarm(Date.now() + 10000);
+    await this.state.storage.setAlarm(Date.now() + 8000);
   }
 
   broadcastDeviceList() {
@@ -62,7 +62,7 @@ class wsRoom {
     this.broadcastDeviceList();
 
     if (!await this.state.storage.getAlarm()) {
-      await this.state.storage.setAlarm(Date.now() + 10000);
+      await this.state.storage.setAlarm(Date.now() + 8000);
     }
 
     server.addEventListener("message", async (msg) => {
