@@ -104,6 +104,7 @@ if (json.type === "register" && json.deviceId) {
         server.lastActive = Date.now(); // полезно для таймаутов
 
         this.sessions.set(json.deviceId, server);
+        try { server.send(JSON.stringify({ type: "registered" })); } catch(e) {}
         this.broadcastDeviceList();
     } else {
         // Если сокет тот же, просто обновляем время активности
