@@ -74,6 +74,7 @@ class wsRoom {
     server.addEventListener("message", async (msg) => {
       const dataString = typeof msg.data === "string" ? msg.data : new TextDecoder().decode(msg.data);
       server.lastActive = Date.now();
+      if (dataString === "ping") { try { server.send("pong"); } catch (e) {} return; }
       if (dataString.startsWith("id:")) return;
       try {
         const json = JSON.parse(dataString);
