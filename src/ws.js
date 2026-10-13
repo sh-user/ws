@@ -39,9 +39,15 @@ class wsRoom {
   }
 
   broadcastDeviceList() {
+    // devices - як і раніше масив ID (за ним працюють targetId/selectDevice); names - необов'язкові назви плат {id: "tinySA v0.3ZS304"}
+    const names = {};
+    for (const [id, socket] of this.sessions.entries()) {
+      if (socket.deviceName) names[id] = socket.deviceName;
+    }
     const list = JSON.stringify({
       type: "deviceList",
-      devices: Array.from(this.sessions.keys())
+      devices: Array.from(this.sessions.keys()),
+      names
     });
     for (const conn of this.connections) {
       if (!conn.isDevice && conn.readyState === 1) {
@@ -86,6 +92,7 @@ class wsRoom {
 // 1. РЕГИСТРАЦИЯ ПЛАТЫ
 if (json.type === "register" && json.deviceId) {
     const existing = this.sessions.get(json.deviceId);
+    const newName = typeof json.name === "string" ? json.name.slice(0, 60) : "";
 
     // Если это действительно НОВОЕ соединение (а не повторный пакет от того же сокета)
     if (existing !== server) {
@@ -101,14 +108,19 @@ if (json.type === "register" && json.deviceId) {
         // Теперь привязываем данные к новому сокету
         server.isDevice = true;
         server.deviceId = json.deviceId;
+        server.deviceName = newName;
         server.lastActive = Date.now(); // полезно для таймаутов
 
         this.sessions.set(json.deviceId, server);
         try { server.send(JSON.stringify({ type: "registered" })); } catch(e) {}
         this.broadcastDeviceList();
     } else {
-        // Если сокет тот же, просто обновляем время активности
+        // Если сокет тот же, обновляем время активности; если сменилось название платы - сообщаем браузерам
         server.lastActive = Date.now();
+        if ((server.deviceName || "") !== newName) {
+            server.deviceName = newName;
+            this.broadcastDeviceList();
+        }
     }
     return;
 }
