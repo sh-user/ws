@@ -72,6 +72,13 @@ class wsRoom {
     }
 
     server.addEventListener("message", async (msg) => {
+      // Бинарные кадры (образ прошивки) от браузера уходят как есть выбранной плате
+      if (typeof msg.data !== "string") {
+        server.lastActive = Date.now();
+        const t = server.isDevice ? null : this.sessions.get(server.selectedDeviceId);
+        if (t?.readyState === 1) { try { t.send(msg.data); } catch (e) {} }
+        return;
+      }
       const dataString = typeof msg.data === "string" ? msg.data : new TextDecoder().decode(msg.data);
       server.lastActive = Date.now();
       if (dataString === "ping") { try { server.send("pong"); } catch (e) {} return; }
