@@ -2,6 +2,9 @@ var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
 // --- КЛАСС DURABLE OBJECT ---
+const DEVICE_SILENCE_MS = 45000;  // нет сообщений от платы дольше этого -> закрыть (плата считает мёртвым канал через 35 с)
+const ALARM_MS = 15000;           // период очистки (рассылки "?" больше нет)
+
 class wsRoom {
   static { __name(this, "wsRoom"); }
   
@@ -24,18 +27,19 @@ class wsRoom {
         continue;
       }
 
-      if (now - (socket.lastActive || 0) > 25000) {
-        socket.close(1011, "Heartbeat timeout");
+      // Плата сама шлёт "dping" каждые 10 с; сервер лишь пассивно следит за тишиной
+      if (now - (socket.lastActive || 0) > DEVICE_SILENCE_MS) {
+        console.log(`drop ${id}: silent ${now - (socket.lastActive || 0)} ms`);
+        try { socket.close(1011, "Heartbeat timeout"); } catch (e) {}
         this.sessions.delete(id);
         this.connections.delete(socket);
         hasChanges = true;
-      } else {
-        try { socket.send("?"); } catch (e) {}
       }
     }
 
     if (hasChanges) this.broadcastDeviceList();
-    await this.state.storage.setAlarm(Date.now() + 8000);
+    // Будильник нужен, пока есть платы; новое соединение (fetch) запускает его снова
+    if (this.sessions.size) await this.state.storage.setAlarm(Date.now() + ALARM_MS);
   }
 
   broadcastDeviceList() {
@@ -68,7 +72,7 @@ class wsRoom {
     this.broadcastDeviceList();
 
     if (!await this.state.storage.getAlarm()) {
-      await this.state.storage.setAlarm(Date.now() + 8000);
+      await this.state.storage.setAlarm(Date.now() + ALARM_MS);
     }
 
     server.addEventListener("message", async (msg) => {
@@ -82,6 +86,8 @@ class wsRoom {
       const dataString = typeof msg.data === "string" ? msg.data : new TextDecoder().decode(msg.data);
       server.lastActive = Date.now();
       if (dataString === "ping") { try { server.send("pong"); } catch (e) {} return; }
+      // Пинг платы. Если сокет ещё не зарегистрирован как плата (например, после перезапуска DO) - просим регистрацию
+      if (dataString === "dping") { try { server.send(server.isDevice ? "pong" : "?"); } catch (e) {} return; }
       if (dataString.startsWith("id:")) return;
       try {
         const json = JSON.parse(dataString);
@@ -152,7 +158,8 @@ if (json.type === "register" && json.deviceId) {
       }
     });
 
-    server.addEventListener("close", () => {
+    server.addEventListener("close", (e) => {
+  console.log("close", server.deviceId || "(browser)", e && e.code, e && e.reason);
   this.connections.delete(server);
   // ПРОВЕРКА: Удаляем ID из сессий ТОЛЬКО если в мапе лежит 
   // именно этот закрывающийся объект (server).
