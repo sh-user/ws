@@ -9,6 +9,7 @@ class wsRoom {
   static { __name(this, "wsRoom"); }
   
   constructor(state, env) {
+    console.log("DO started", new Date().toISOString());
     this.state = state;
     this.env = env;
     this.connections = new Set(); 
